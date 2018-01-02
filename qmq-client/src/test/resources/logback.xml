@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <appender name="console" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder charset="UTF-8">
+            <pattern>[%d{HH:mm:ss} %thread %-5p %c{36}:%L %X{rtxId} %X{ip}] %m%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="console" />
+    </root>
+    <logger name="org.springframework" level="INFO" />
+    <logger name="java.sql" level="INFO" />
+
+</configuration>

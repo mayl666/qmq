@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app version="2.4" xmlns="http://java.sun.com/xml/ns/j2ee"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://java.sun.com/xml/ns/j2ee
+	http://java.sun.com/xml/ns/j2ee/web-app_2_4.xsd">
+
+    <listener>
+        <listener-class>qunar.ServletWatcher</listener-class>
+    </listener>
+
+    <listener>
+        <listener-class>qunar.tc.qmq.container.WebContainerListener</listener-class>
+    </listener>
+
+    <filter>
+        <filter-name>encodingFilter</filter-name>
+        <filter-class>org.springframework.web.filter.CharacterEncodingFilter</filter-class>
+        <init-param>
+            <param-name>encoding</param-name>
+            <param-value>UTF-8</param-value>
+        </init-param>
+        <init-param>
+            <param-name>forceEncoding</param-name>
+            <param-value>true</param-value>
+        </init-param>
+    </filter>
+
+    <filter-mapping>
+        <filter-name>encodingFilter</filter-name>
+        <url-pattern>/*</url-pattern>
+    </filter-mapping>
+
+    <filter>
+        <filter-name>init</filter-name>
+        <filter-class>qunar.ServletWatcher</filter-class>
+    </filter>
+
+    <filter-mapping>
+        <filter-name>init</filter-name>
+        <url-pattern>/*</url-pattern>
+    </filter-mapping>
+
+
+    <servlet>
+        <servlet-name>producerTest</servlet-name>
+        <servlet-class>qunar.tc.qmq.web.ProducerServlet</servlet-class>
+    </servlet>
+
+    <servlet-mapping>
+        <servlet-name>producerTest</servlet-name>
+        <url-pattern>/qmq/producer</url-pattern>
+    </servlet-mapping>
+
+    <servlet>
+        <servlet-name>consumerTest</servlet-name>
+        <servlet-class>qunar.tc.qmq.web.ConsumerServlet</servlet-class>
+    </servlet>
+
+    <servlet-mapping>
+        <servlet-name>consumerTest</servlet-name>
+        <url-pattern>/qmq/consumer</url-pattern>
+    </servlet-mapping>
+
+    <servlet>
+        <servlet-name>logTest</servlet-name>
+        <servlet-class>qunar.tc.qmq.web.LogCheckServlet</servlet-class>
+    </servlet>
+
+    <servlet-mapping>
+        <servlet-name>logTest</servlet-name>
+        <url-pattern>/qmq/log</url-pattern>
+    </servlet-mapping>
+
+</web-app>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xsd:schema xmlns="http://www.qunar.com/schema/qmq"
+            xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+            xmlns:tool="http://www.springframework.org/schema/tool"
+            targetNamespace="http://www.qunar.com/schema/qmq"
+            elementFormDefault="qualified"
+            attributeFormDefault="unqualified">
+
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace"/>
+    <xsd:import namespace="http://www.springframework.org/schema/tool"/>
+
+    <xsd:annotation>
+        <xsd:documentation><![CDATA[ Namespace support for the qmq provided by Qunar. ]]></xsd:documentation>
+    </xsd:annotation>
+
+    <xsd:element name="consumer">
+        <xsd:annotation>
+            <xsd:documentation><![CDATA[ qmq consumer注解扫描的配置节点 ]]></xsd:documentation>
+        </xsd:annotation>
+        <xsd:complexType>
+            <xsd:attribute name="port" type="xsd:string" use="optional" >
+                <xsd:annotation>
+                    <xsd:documentation><![CDATA[ 接收消息的端口号(可选)，默认使用随机分配。但是如果使用广播模式的话，则必须设置。 ]]></xsd:documentation>
+                </xsd:annotation>
+            </xsd:attribute>
+        </xsd:complexType>
+    </xsd:element>
+
+
+</xsd:schema>

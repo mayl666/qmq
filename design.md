@@ -1,0 +1,69 @@
+目前QMQ使用db的方式存放消息内容，使用redis存放发送记录，采用推的方式发送消息。这种方式存在以下一些问题：
+
+1. 难以处理消息海量堆积的问题。因为qmq依靠恢复任务来扫描db中的消息与redis中的发送记录状态进行对比，发现状态不是最终状态时会重新发送消息。在消息出现严重堆积的时候，db中会堆积非常多的消息，恢复任务执行时间会大大延长。这就导致一些第一次消费失败的消息会等很久才会重新发送，一个消费者堆积可能会导致其他消费者出问题。
+另外使用redis存放发送记录，也受限于redis的大小，如果出现堆积的时候redis里存放太多的内容占用大量内存，这就需要预先申请一个非常大的redis集群，而这个集群里大部分时候并没有很多消息，比如现在线上每个集群申请了160G内存，而无堆积的时候才只占用3G左右内存，而大量堆积的时候一度占用了120G内存，这将非常浪费资源。
+
+2. 增加不稳定性，依赖太多稳定性就越差。依赖db，依赖redis都受限于db和redis的稳定性，网络的可靠性。而且部署起来也非常复杂。
+
+3. 流控。qmq采用的是推模式，虽然现在使用计数的方式部分解决了流控的问题，但推模式终究没有拉模式那么容易控制消费能力。
+
+这些问题都是影响qmq稳定性和进一步发展的核心问题。现在我描述一下我的一些想法。那么在这之前让我们先来研究一下目前比较流行的两个消息队列：Kafka和RocketMQ。Kafka和RocketMQ都是使用文件存储的消息队列。Kafka对于每个Topic会分为多个Partition,每个Partition会有多个文件(当前正在写的只有一个，按大小切分)，RocketMQ对于Kafka的改进主要在所有的Topic的消息都写到一起(几个Partition)，主要用于解决当Topic太多，会存在大量的文件，这样Kafka所依赖的顺序IO的优势将不复存在。
+而不管Kafka和RocketMQ都存在Consumer和Partition绑定的问题。Consumer与Partition绑定会存在两个问题：
+
+1. 如果Partition的个数小于Consumer的个数，则有的Consumer会空闲，而且在消息出现堆积时扩容消费者也比较麻烦。我觉得这在业务消息中是一个很大的问题。就拿我们酒店的核心消息hotel.qta.order.store.update来说，总共有50个消费集群消费。最多的一个集群有19个消费者，而最少的一个只有一个消费者。这样的情况在业务消息中应该是普遍存在的，因为业务各不相同，很难做到均衡。
+
+2. 因为Partition是预分配的，不能预知消费者能力，这在将消息队列作为任务分配的时候也存在一定的问题。比如我有一万个任务需要分派，那我发送一万条消息，由10个consumer处理，我现在分为十个Partition,这个时候可能有的Consumer消费比较快很快就消费完了Partition里的消息，而有的却没有，但是消费快的又不能来帮忙。
+
+所以我觉得采用consumer与partition绑定在业务消息的场景并不是特别合适。那么如果consumer与partition不绑定，我们就不能仅仅记录一个offset表示消费量了，我们就需要跟踪每一条消息的消费状态。而消费状态又需要update，所以要能快速更新，比如放在内存里。那么这就又出现了QMQ现在版本的问题：海量堆积的问题。
+那怎么做到既不记录每条消息的消费状态，而又能不将Consumer与Partition绑定呢？我觉得问题不在于Consumer与Partition绑定，而在于Partition预分配。
+基于上面的一些分析，我的想法是按照下面的模型重构QMQ。
+
+## 主流程
+*注意*以下流程描述的是可靠消息的场景，非可靠消息是在此基础上简化的。另外，新版本qmq不再在Producer端设置可靠和非可靠(但是为了保持向前的兼容性，以前的设置仍然生效)。
+非可靠调整为只消费一次语义，即不管消费成功还是失败只拉取一次消息。
+
+Producer将消息发送到Broker后，Broker立即将消息append到message log。message log是几个顺序文件。append成功之后就可以立即告诉Producer成功了。
+然后根据订阅关系将消息在message log里的offset和长度append到consumer log。每个subject会有一个consumer log。
+
+Consumer采用拉的方式向Broker发送PullRequest，PullRequest里包含请求的数量和超时时间，任何一个条件先满足PullRequest就会立即返回。
+PullRequest里还包含了消费每个Subject对应的offset(为啥是每个，因为qmq使用的是前缀匹配订阅，所以一个订阅可能对应着多个subject)，Consumer还应该将这个offset在本地持久化。
+Broker收到PullRequest会从consumer log里读取消息在message log里的offset和len，并且将这次拉取的消息在consumer log里的logic actionLogOffset append到pull log里。然后将消息内容发送给consumer(可以用sendfile)。并且会更新consumer log里的consumer actionLogOffset(consumer offset会定期刷盘)。下一次再收到PullRequest会从这个consumer offset开始消费起。
+消费者处理消息失败回发回nack，broker收到nack后会将对应的消息append到error log。Consumer还会定期发回现在消费成功的ack success。这个offset是对应pull log的offset。但是要保证，ack success和ack error一定是要有顺序的，offset小的先发回，也就是一定不能出现先ack error 100，然后发回一个ack success 50。
+另外，ack是返回给当前broker，即这条消息是从谁那里拉取的，ack就返回给它。那么如果遇到broker挂掉ack总是发不回去该怎么办？
+1. ack error如果发不回当前的broker，可以发往其他broker，但是发往其他broker的时候不仅仅只发一个offset，需要发送整个消息体，其他broker如果收到整个消息体的ack，则直接将其append到error log。
+2. 如果ack error所有的broker都发不回去，则可以写到本地
+3. ack error发成功(不管是发到其他broker还是发写到本地都可以认为ack error发成功)后就可以处理ack success
+4. ack success只能发到当前broker，如果发不过去可以记录到本地
+
+consumer与broker之间维持心跳，一段时间后broker没有收到心跳则认为该consumer离线，broker会将对应consumer的pull log的ack offset和到末尾位置的消息都转移到error log以备重新投递。consumer一段时间与broker失联后，如果还有未处理消息则全部放弃处理。
+error log的处理和consumer log类似。但是有几点不同：
+
+1. error log里不是立即发送的，会定期滞后发送
+
+2. error log里消息的发送还有一些策略，比如次数，过期时间等。
+
+3. error log里还会记录发送次数。error log是滚动的，每次check如果消费失败会记录一个新的error log记录，如果消息过期了，或者超过了发送次数则消息不再发送，不会生成新的发送记录。
+
+## Broker的启动流程
+broker启动的时候会从末尾读取所有consumer log，找到各个message log的最大offset，如果这个offset比message log的latest offset小，则要将message log里读到各个consumer log。
+
+## 对qmq client的改造
+主要改造网络传输层和序列化层。不再使用dubbo网络传输
+将Message分为header和body，这个只是序列化的时候做。这样server反序列化的时候只需要读取header就行了，读取subject等信息。body就不用反序列化了，可以直接将网络传输过来的内容append。
+consumer端网络层要修改为拉模式
+
+## 历史消息备份
+现在已经全部存储成文件的方式，是不是可以直接用hdfs了，将整个文件写入到hdfs，而不是一个个消息插入hbase。
+
+## 名词解释
+* *message log* 全局共享，分为多个partition，所有消息的内容都append到message log。
+* *consumer log* 每个subject一个consumer log，每条记录包含message log partition id，消息在message log里的offset和len(消息长度)，记录的长度固定。
+* *pull log* 每个consumer对应一个拉取日志。每条记录包含offset(消息在consuemr log里的logic actionLogOffset)，num(消息的条数)。
+* *error log* 每个consumer group一个error log，error log里记录的是check时消费失败的消息
+
+## 问题
+1. 优先级队列如何支持，类似RabbitMQ可以给消息设置一个优先级level。当consumer取消息的时候会优先取到高优先级的消息。
+
+2. 顺序消息如何实现？虽然并不推荐顺序消息，但是在某些场景还是很有用的，模型至少要为未来支持顺序消费留有余地。
+
+3. 现在的qmq consumer的NeedRetryException需要重构，需要将消息内容都转发给delayQ，而不是像现在只需要一个message id即可。

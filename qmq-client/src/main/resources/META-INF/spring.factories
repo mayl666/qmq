@@ -1,0 +1,2 @@
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+  qunar.tc.qmq.consumer.annotation.QmqConsumerAutoConfiguration
